@@ -1,0 +1,6 @@
+/upstream/
+/build/
+/dist/
+/translations/overrides.json
+__pycache__/
+*.pyc

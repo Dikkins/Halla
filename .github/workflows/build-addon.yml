@@ -1,0 +1,78 @@
+name: Build Halla RU native addon
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'translations/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/build-addon.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Checkout localization
+        uses: actions/checkout@v4
+
+      - name: Checkout matching Halla source and SDK
+        uses: actions/checkout@v4
+        with:
+          repository: GroupHalla/Halla
+          ref: v1.1.37
+          path: upstream
+          persist-credentials: false
+
+      - name: Set up MSVC x64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install same Qt version as official Halla
+        uses: jurplel/install-qt-action@v4.3.1
+        with:
+          version: 6.8.3
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Restore the translation overrides
+        shell: pwsh
+        run: |
+          python -c "import gzip,pathlib; p=pathlib.Path('translations/overrides.json.gz'); p.with_suffix('').write_bytes(gzip.decompress(p.read_bytes()))"
+
+      - name: Validate translation sources
+        shell: pwsh
+        run: python -m unittest discover -s tests -v
+
+      - name: Build native DLL (Qt6Core only)
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G 'Visual Studio 17 2022' -A x64 "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+          cmake --build build --config Release --parallel 2
+          if (!(Test-Path build/Release/halla_ru.dll)) { throw 'Missing add-on DLL' }
+
+      - name: Generate Russian catalog
+        shell: pwsh
+        run: |
+          python scripts/build_catalog.py --source upstream/translations/halla_en.ts --overrides translations/overrides.json --output build/halla_ru.json
+
+      - name: Package native add-on
+        shell: pwsh
+        run: |
+          python scripts/package_addon.py --dll build/Release/halla_ru.dll --dictionary build/halla_ru.json --out dist/Halla-RU-0.2.0.halla-addon
+          Get-FileHash dist/Halla-RU-0.2.0.halla-addon -Algorithm SHA256 | Format-List
+
+      - name: Upload ready-to-install .halla-addon
+        uses: actions/upload-artifact@v4
+        with:
+          name: Halla-RU-0.2.0-Windows-x64
+          path: dist/*
+          if-no-files-found: error
